@@ -161,10 +161,26 @@ cargo run -p qcap-cli -- hash "hello world"
 
 ### Run the registry (dev)
 
+You can seed demo capsules and run the registry locally. It exposes:
+
+* `/` — HTML landing page with links
+* `/health` — JSON status
+* `/health.html` — HTML status page
+* `/index.json` — JSON list of seeded `.qcap` artifacts
+* `/index` — HTML index listing
+* `/artifacts/<name>` — static download of seeded artifacts
+
+Quick start:
+
 ```bash
-cd services/qcap-registry
-go run .
-# GET http://localhost:8080/health  -> {"status":"ok"}
+# Seed demo artifacts (alpha.qcap, beta.qcap)
+scripts/seed-registry.sh
+
+# Run the registry
+go run services/qcap-registry/main.go
+
+# Optional: smoke test endpoints
+scripts/smoke-registry.sh
 ```
 
 ### Build the TS SDK stub
@@ -282,7 +298,77 @@ cargo run -p qcap-cli -- hash "hello"
 # Registry health check
 (cd services/qcap-registry && go run .)
 curl http://localhost:8080/health
+# Explore landing page and index
+open http://localhost:8080/ || xdg-open http://localhost:8080/
+curl http://localhost:8080/index.json | jq .
 ```
+
+---
+
+## MVP Quick Start: Pack, Verify, Inspect, Grant, Open
+
+Prerequisites:
+
+* Rust (cargo) installed
+* macOS/Linux shell (commands below use zsh/bash)
+
+Step 1 — Build the workspace:
+
+```bash
+cargo build --workspace
+```
+
+Step 2 — Prepare a sample payload directory:
+
+```bash
+mkdir -p /tmp/qcap-demo/payload
+echo "hello" > /tmp/qcap-demo/payload/file1.txt
+printf "01020304" | xxd -r -p > /tmp/qcap-demo/payload/file2.bin
+```
+
+Step 3 — Create a 32-byte ed25519 seed (hex) for signing:
+
+```bash
+echo "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" > /tmp/ed25519.seed.hex
+```
+
+Step 4 — Pack a `.qcap` archive:
+
+```bash
+cargo run -p qcap-cli -- pack /tmp/qcap-demo/payload --out /tmp/demo.qcap --key /tmp/ed25519.seed.hex
+```
+
+Step 5 — Verify the capsule:
+
+```bash
+cargo run -p qcap-cli -- verify /tmp/demo.qcap
+```
+
+Step 6 — Inspect metadata quickly:
+
+```bash
+cargo run -p qcap-cli -- inspect /tmp/demo.qcap
+```
+
+Step 7 — Grant a minimal capability token (allow=read):
+
+```bash
+cargo run -p qcap-cli -- grant /tmp/demo.qcap --allow read --expires unix-seconds:9999999999 --key /tmp/ed25519.seed.hex --out /tmp/cap.json
+```
+
+Step 8 — Open (export) the payload using the capability token:
+
+```bash
+cargo run -p qcap-cli -- open /tmp/demo.qcap --cap /tmp/cap.json --out /tmp/exported
+ls -R /tmp/exported
+```
+
+Notes:
+
+* The CLI expects a raw 32-byte ed25519 seed encoded as hex for signing (`--key`).
+* The capability token format is minimal and bound to the Merkle root; `open` enforces `allow=read`.
+* Archives are ZIP-based with layout: `manifest.json`, `payload/…`, `meta/`, `signatures/manifest.sig.json`.
+
 
 ---
 
