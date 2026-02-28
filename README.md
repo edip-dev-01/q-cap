@@ -261,12 +261,6 @@ Q-Cap is payload-agnostic but designed to carry geospatial content. The MVP will
 
 ---
 
-## GBA+ and Accessibility
-
-We aim for a bilingual CLI (`--lang en|fr`) and accessible documentation. Capability policies and metadata should be reviewed for impacts on diverse users and use cases. See `docs/gba-plus-note.md`.
-
----
-
 ## Contributing
 
 We welcome issues and PRs. Please read:
