@@ -2,11 +2,11 @@
 use blake3::Hasher;
 use thiserror::Error;
 
-pub mod manifest;
 pub mod archive;
+pub mod capabilities;
+pub mod manifest;
 pub mod payload_merkle;
 pub mod signatures;
-pub mod capabilities;
 
 #[derive(Debug, Error)]
 pub enum QcapError {

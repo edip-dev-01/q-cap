@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Capsule struct {
@@ -54,6 +56,9 @@ func main() {
 		seedDir = "services/qcap-registry/seed"
 	}
 	reg := &Registry{SeedDir: seedDir}
+	if err := os.MkdirAll(seedDir, 0755); err != nil {
+		log.Fatalf("could not create seed dir: %v", err)
+	}
 	if err := reg.loadIndex(); err != nil {
 		log.Printf("warn: could not load seed: %v", err)
 	}
@@ -97,12 +102,14 @@ func main() {
 
 	// JSON index endpoint
 	mux.HandleFunc("/index.json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = reg.loadIndex()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(reg.Index)
 	})
 
 	// HTML index page with description and simple listing
 	mux.HandleFunc("/index", func(w http.ResponseWriter, _ *http.Request) {
+		_ = reg.loadIndex()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("<!doctype html><html><head><meta charset=\"utf-8\"><title>Index</title></head><body>"))
@@ -124,11 +131,54 @@ func main() {
 		w.Write([]byte("</body></html>"))
 	})
 
+	mux.HandleFunc("/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		name := safeArtifactName(r.Header.Get("X-Qcap-Name"))
+		if name == "" {
+			name = "artifact.qcap"
+		}
+		if filepath.Ext(name) != ".qcap" {
+			name += ".qcap"
+		}
+		dest := filepath.Join(seedDir, name)
+		out, err := os.Create(dest)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer out.Close()
+		if _, err := io.Copy(out, http.MaxBytesReader(w, r.Body, 512<<20)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = reg.loadIndex()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(Capsule{
+			Name:        name,
+			Path:        "/artifacts/" + name,
+			ContentType: "application/qcap+zip",
+		})
+	})
+
 	mux.Handle("/artifacts/", http.StripPrefix("/artifacts/", http.FileServer(http.Dir(seedDir))))
 
 	addr := ":8080"
 	log.Printf("registry listening on %s; seed dir: %s", addr, seedDir)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+func safeArtifactName(raw string) string {
+	name := filepath.Base(strings.TrimSpace(raw))
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "/", "_")
+	if name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	return name
 }
 
 // formatSize returns a human-readable byte size (e.g., 1.2 MB)

@@ -14,7 +14,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 /// - `payload/…` (all files under input_dir)
 /// - `meta/` (empty)
 /// - `signatures/` (empty)
-pub fn create_qcap_archive(input_dir: &Path, manifest: &QcapManifest, output_file: &Path) -> Result<()> {
+pub fn create_qcap_archive(
+    input_dir: &Path,
+    manifest: &QcapManifest,
+    output_file: &Path,
+) -> Result<()> {
     // Ensure input_dir exists
     if !input_dir.is_dir() {
         return Err(format!("input_dir is not a directory: {}", input_dir.display()).into());
@@ -90,7 +94,10 @@ pub fn create_qcap_archive_with_signature(
 
 fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let p = entry.path();
         if p.is_file() {
             out.push(p.to_path_buf());
@@ -111,8 +118,8 @@ fn path_to_string(p: &Path) -> Result<String> {
 mod tests {
     use super::*;
     use crate::manifest::QcapManifest;
-    use std::io::Read;
     use std::fs;
+    use std::io::Read;
     use tempfile::tempdir;
     use zip::read::ZipArchive;
 
@@ -151,11 +158,17 @@ mod tests {
         // meta/ and signatures/ directories exist (they may not be listed as entries depending on zip impl,
         // but we can try to access them by name; if not, ensure payload files exist)
         let mut file1 = String::new();
-        zip.by_name("payload/file1.txt").unwrap().read_to_string(&mut file1).unwrap();
+        zip.by_name("payload/file1.txt")
+            .unwrap()
+            .read_to_string(&mut file1)
+            .unwrap();
         assert_eq!(file1, "hello");
 
         let mut file2 = Vec::new();
-        zip.by_name("payload/file2.bin").unwrap().read_to_end(&mut file2).unwrap();
+        zip.by_name("payload/file2.bin")
+            .unwrap()
+            .read_to_end(&mut file2)
+            .unwrap();
         assert_eq!(file2, vec![1u8, 2, 3, 4]);
     }
 }

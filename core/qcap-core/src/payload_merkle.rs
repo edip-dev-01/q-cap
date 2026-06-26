@@ -1,6 +1,6 @@
 use blake3::Hasher;
 use std::fs::File;
-use std::io::{Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -15,10 +15,14 @@ pub fn compute_payload_merkle_root(input_dir: &Path) -> Result<String> {
     let mut leaves: Vec<[u8; 32]> = Vec::new();
     for abs in files {
         let rel = abs.strip_prefix(input_dir).unwrap();
-        let path_bytes = rel.as_os_str().to_string_lossy().replace('\\', "/").into_bytes();
-    let mut h = Hasher::new();
-    h.update(&path_bytes);
-    h.update(&[0]);
+        let path_bytes = rel
+            .as_os_str()
+            .to_string_lossy()
+            .replace('\\', "/")
+            .into_bytes();
+        let mut h = Hasher::new();
+        h.update(&path_bytes);
+        h.update(&[0]);
         let mut f = File::open(&abs)?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
@@ -28,7 +32,7 @@ pub fn compute_payload_merkle_root(input_dir: &Path) -> Result<String> {
 
     if leaves.is_empty() {
         // empty directory -> hash of empty string
-        let mut h = Hasher::new();
+        let h = Hasher::new();
         let root = h.finalize();
         return Ok(format!("blake3:{}", root.to_hex()));
     }
@@ -53,12 +57,18 @@ pub fn compute_payload_merkle_root(input_dir: &Path) -> Result<String> {
         }
         level = next;
     }
-    Ok(format!("blake3:{}", blake3::Hash::from_bytes(level[0]).to_hex()))
+    Ok(format!(
+        "blake3:{}",
+        blake3::Hash::from_bytes(level[0]).to_hex()
+    ))
 }
 
 fn list_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let p = entry.path();
         if p.is_file() {
             out.push(p.to_path_buf());

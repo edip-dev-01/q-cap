@@ -159,6 +159,38 @@ cargo run -p qcap-cli -- hash "hello world"
 # -> blake3:7d8d... (hash will vary)
 ```
 
+### MVP demo: sealed package, capability, registry
+
+The current MVP demonstrates the core Q-Cap flow locally:
+
+1. Generate issuer and recipient identities.
+2. Seal a payload directory into an encrypted `.qcap`.
+3. Publish and fetch it through the local registry.
+4. Prove open fails without a capability.
+5. Grant a capability for `reports/*`.
+6. Open only the authorized payload path.
+
+On Windows PowerShell:
+
+```powershell
+.\scripts\demo.ps1
+```
+
+Manual equivalent:
+
+```bash
+cargo run -p qcap-cli -- init --name issuer --out /tmp/qcap-demo/issuer.identity.json
+cargo run -p qcap-cli -- init --name recipient --out /tmp/qcap-demo/recipient.identity.json
+cargo run -p qcap-cli -- seal /tmp/qcap-demo/payload --issuer /tmp/qcap-demo/issuer.identity.json --recipient /tmp/qcap-demo/recipient.identity.json --out /tmp/qcap-demo/demo.qcap
+QCAP_REGISTRY_SEED=/tmp/qcap-demo/registry go run services/qcap-registry/main.go
+cargo run -p qcap-cli -- publish /tmp/qcap-demo/demo.qcap --registry http://127.0.0.1:8080
+cargo run -p qcap-cli -- fetch demo.qcap --out /tmp/qcap-demo/fetched.qcap --registry http://127.0.0.1:8080
+cargo run -p qcap-cli -- grant /tmp/qcap-demo/fetched.qcap --issuer /tmp/qcap-demo/issuer.identity.json --audience <recipient-id> --path "reports/*" --out /tmp/qcap-demo/cap.json
+cargo run -p qcap-cli -- open /tmp/qcap-demo/fetched.qcap --cap /tmp/qcap-demo/cap.json --identity /tmp/qcap-demo/recipient.identity.json --out /tmp/qcap-demo/exported
+```
+
+This is an MVP, not a hardened security product. It uses XChaCha20-Poly1305 for file encryption, X25519-derived wrapping keys for recipients, ed25519 signatures over the Merkle root, and signed capability tokens with enforced expiry, audience, and path constraints.
+
 ### Run the registry (dev)
 
 You can seed demo capsules and run the registry locally. It exposes:
