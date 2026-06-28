@@ -165,10 +165,11 @@ The current MVP demonstrates the core Q-Cap flow locally:
 
 1. Generate issuer and recipient identities.
 2. Seal a payload directory into an encrypted `.qcap`.
-3. Publish and fetch it through the local registry.
-4. Prove open fails without a capability.
-5. Grant a capability for `reports/*`.
-6. Open only the authorized payload path.
+3. Include a generated sample GeoPackage at `reports/observations.gpkg`.
+4. Publish and fetch it through the local registry.
+5. Prove open fails without a capability.
+6. Grant a capability for `reports/*`.
+7. Open only the authorized payload path and verify the GeoPackage exports unchanged.
 
 On Windows PowerShell:
 
@@ -181,6 +182,7 @@ Manual equivalent:
 ```bash
 cargo run -p qcap-cli -- init --name issuer --out /tmp/qcap-demo/issuer.identity.json
 cargo run -p qcap-cli -- init --name recipient --out /tmp/qcap-demo/recipient.identity.json
+cargo run -p qcap-cli -- sample-geopackage --out /tmp/qcap-demo/payload/reports/observations.gpkg
 cargo run -p qcap-cli -- seal /tmp/qcap-demo/payload --issuer /tmp/qcap-demo/issuer.identity.json --recipient /tmp/qcap-demo/recipient.identity.json --out /tmp/qcap-demo/demo.qcap
 QCAP_REGISTRY_SEED=/tmp/qcap-demo/registry go run services/qcap-registry/main.go
 cargo run -p qcap-cli -- publish /tmp/qcap-demo/demo.qcap --registry http://127.0.0.1:8080
@@ -285,9 +287,17 @@ A `.qcap` is a **single file** (ZIP or tar+gz) containing:
 
 ## Geospatial & GeoPackage
 
-Q-Cap is payload-agnostic but designed to carry geospatial content. The MVP will document how to:
+Q-Cap is payload-agnostic but designed to carry geospatial content. The MVP includes a concrete GeoPackage fixture:
 
-* Transport **GeoPackage** unchanged inside `.qcap`
+```bash
+cargo run -p qcap-cli -- sample-geopackage --out /tmp/qcap-demo/payload/reports/observations.gpkg
+```
+
+The generated file is a valid SQLite-backed GeoPackage with one WGS 84 point feature. The MVP demo seals it inside `.qcap`, grants access to `reports/*`, opens the package, and verifies the exported GeoPackage is byte-for-byte unchanged.
+
+The format supports:
+
+* Transporting **GeoPackage** unchanged inside `.qcap`
 * Embed STAC/OGC metadata in `meta/`
 * Stream-verify large rasters via Merkle while fetching ranges
 

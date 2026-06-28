@@ -243,6 +243,7 @@ fn seal_grant_open_exports_only_allowed_paths() {
     let qcap = root.join("sealed.qcap");
     let cap = root.join("cap.json");
     let export_dir = root.join("exported");
+    let geopackage = payload.join("reports/observations.gpkg");
 
     Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
         .args([
@@ -264,6 +265,17 @@ fn seal_grant_open_exports_only_allowed_paths() {
         ])
         .assert()
         .success();
+
+    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        .args(["sample-geopackage", "--out", geopackage.to_str().unwrap()])
+        .assert()
+        .success();
+    assert!(
+        fs::read(&geopackage)
+            .unwrap()
+            .starts_with(b"SQLite format 3\0"),
+        "sample GeoPackage is a SQLite database"
+    );
 
     let recipient_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&recipient).unwrap()).unwrap();
@@ -314,5 +326,10 @@ fn seal_grant_open_exports_only_allowed_paths() {
         .success();
 
     assert!(export_dir.join("reports/summary.txt").exists());
+    assert_eq!(
+        fs::read(&geopackage).unwrap(),
+        fs::read(export_dir.join("reports/observations.gpkg")).unwrap(),
+        "GeoPackage should export byte-for-byte unchanged"
+    );
     assert!(!export_dir.join("secrets/private.txt").exists());
 }

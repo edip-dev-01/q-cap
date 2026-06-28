@@ -14,6 +14,7 @@ use qcap_core::payload_merkle::compute_payload_merkle_root;
 use qcap_core::signatures::{sign_merkle_root, verify_signature, QcapSignatureBundle};
 use rand::rngs::OsRng;
 use rand::RngCore;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
 use walkdir::WalkDir;
@@ -102,6 +103,11 @@ enum Commands {
         #[arg(long = "registry", default_value = "http://127.0.0.1:8080")]
         registry: String,
     },
+    /// Create a tiny valid GeoPackage fixture for MVP demos and tests
+    SampleGeopackage {
+        #[arg(short = 'o', long = "out")]
+        out: PathBuf,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -178,6 +184,7 @@ fn run() -> Result<()> {
             out,
             registry,
         } => fetch(&artifact, &out, &registry)?,
+        Commands::SampleGeopackage { out } => sample_geopackage(&out)?,
     }
     Ok(())
 }
@@ -531,6 +538,132 @@ fn fetch(artifact: &str, out: &Path, registry: &str) -> Result<()> {
         out.display()
     );
     Ok(())
+}
+
+fn sample_geopackage(out: &Path) -> Result<()> {
+    if let Some(parent) = out.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if out.exists() {
+        fs::remove_file(out)?;
+    }
+
+    let conn = Connection::open(out)?;
+    conn.pragma_update(None, "application_id", 0x4750_4b47i64)?;
+    conn.pragma_update(None, "user_version", 10_300i64)?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE gpkg_spatial_ref_sys (
+            srs_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL PRIMARY KEY,
+            organization TEXT NOT NULL,
+            organization_coordsys_id INTEGER NOT NULL,
+            definition TEXT NOT NULL,
+            description TEXT
+        );
+
+        CREATE TABLE gpkg_contents (
+            table_name TEXT NOT NULL PRIMARY KEY,
+            data_type TEXT NOT NULL,
+            identifier TEXT UNIQUE,
+            description TEXT DEFAULT '',
+            last_change DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            min_x DOUBLE,
+            min_y DOUBLE,
+            max_x DOUBLE,
+            max_y DOUBLE,
+            srs_id INTEGER,
+            CONSTRAINT fk_gc_r_srs_id FOREIGN KEY (srs_id)
+                REFERENCES gpkg_spatial_ref_sys(srs_id)
+        );
+
+        CREATE TABLE gpkg_geometry_columns (
+            table_name TEXT NOT NULL,
+            column_name TEXT NOT NULL,
+            geometry_type_name TEXT NOT NULL,
+            srs_id INTEGER NOT NULL,
+            z TINYINT NOT NULL,
+            m TINYINT NOT NULL,
+            PRIMARY KEY (table_name, column_name),
+            CONSTRAINT fk_ggc_tn FOREIGN KEY (table_name)
+                REFERENCES gpkg_contents(table_name),
+            CONSTRAINT fk_ggc_srs FOREIGN KEY (srs_id)
+                REFERENCES gpkg_spatial_ref_sys(srs_id)
+        );
+
+        CREATE TABLE observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            geom BLOB NOT NULL
+        );
+        "#,
+    )?;
+
+    conn.execute(
+        "INSERT INTO gpkg_spatial_ref_sys VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            "Undefined Cartesian SRS",
+            -1i64,
+            "NONE",
+            -1i64,
+            "undefined",
+            "undefined Cartesian coordinate reference system"
+        ],
+    )?;
+    conn.execute(
+        "INSERT INTO gpkg_spatial_ref_sys VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            "Undefined geographic SRS",
+            0i64,
+            "NONE",
+            0i64,
+            "undefined",
+            "undefined geographic coordinate reference system"
+        ],
+    )?;
+    conn.execute(
+        "INSERT INTO gpkg_spatial_ref_sys VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            "WGS 84 geodetic",
+            4326i64,
+            "EPSG",
+            4326i64,
+            "GEOGCS[\"WGS 84\",DATUM[\"World Geodetic System 1984\",SPHEROID[\"WGS 84\",6378137,298.257223563]],PRIMEM[\"Greenwich\",0],UNIT[\"degree\",0.0174532925199433]]",
+            "longitude/latitude coordinates in decimal degrees"
+        ],
+    )?;
+    conn.execute(
+        "INSERT INTO gpkg_contents (table_name, data_type, identifier, description, last_change, min_x, min_y, max_x, max_y, srs_id)
+         VALUES ('observations', 'features', 'observations', 'Q-Cap MVP sample point layer', '2026-06-27T00:00:00.000Z', -123.1207, 49.2827, -123.1207, 49.2827, 4326)",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO gpkg_geometry_columns VALUES ('observations', 'geom', 'POINT', 4326, 0, 0)",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO observations (name, geom) VALUES (?1, ?2)",
+        params![
+            "Vancouver sample point",
+            geopackage_point_blob(-123.1207, 49.2827)
+        ],
+    )?;
+
+    println!("GeoPackage created\n- output: {}", out.display());
+    Ok(())
+}
+
+fn geopackage_point_blob(x: f64, y: f64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(29);
+    bytes.extend_from_slice(b"GP");
+    bytes.push(0);
+    bytes.push(1);
+    bytes.extend_from_slice(&4326i32.to_le_bytes());
+    bytes.push(1);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&x.to_le_bytes());
+    bytes.extend_from_slice(&y.to_le_bytes());
+    bytes
 }
 
 #[derive(Deserialize)]

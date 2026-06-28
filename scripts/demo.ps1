@@ -10,6 +10,7 @@ $DemoQcap = Join-Path $Work "demo.qcap"
 $Cap = Join-Path $Work "cap.json"
 $Issuer = Join-Path $Work "issuer.identity.json"
 $Recipient = Join-Path $Work "recipient.identity.json"
+$GeoPackage = Join-Path $Payload "reports\observations.gpkg"
 $RegistryOut = Join-Path $Work "registry.out.log"
 $RegistryErr = Join-Path $Work "registry.err.log"
 $RegistryExe = Join-Path $Work "qcap-registry.exe"
@@ -66,6 +67,9 @@ try {
   $recipientIdentity = Get-Content -Raw $Recipient | ConvertFrom-Json
   $recipientAudience = $recipientIdentity.signing_public_key.Substring(0, 16)
 
+  Step "creating sample GeoPackage payload"
+  Run $QcapExe @("sample-geopackage", "--out", $GeoPackage)
+
   Step "sealing encrypted .qcap"
   Run $QcapExe @("seal", $Payload, "--issuer", $Issuer, "--recipient", $Recipient, "--out", $DemoQcap)
   Run $QcapExe @("inspect", $DemoQcap)
@@ -96,12 +100,21 @@ try {
   if (!(Test-Path (Join-Path $Exported "reports\summary.txt"))) {
     throw "allowed report was not exported"
   }
+  if (!(Test-Path (Join-Path $Exported "reports\observations.gpkg"))) {
+    throw "sample GeoPackage was not exported"
+  }
+  $originalGeoPackageHash = (Get-FileHash -Algorithm SHA256 $GeoPackage).Hash
+  $exportedGeoPackageHash = (Get-FileHash -Algorithm SHA256 (Join-Path $Exported "reports\observations.gpkg")).Hash
+  if ($originalGeoPackageHash -ne $exportedGeoPackageHash) {
+    throw "sample GeoPackage changed during seal/open"
+  }
   if (Test-Path (Join-Path $Exported "secrets\private.txt")) {
     throw "restricted secret was exported"
   }
 
   Step "MVP demo complete"
   Write-Host "Allowed output: $(Join-Path $Exported "reports\summary.txt")"
+  Write-Host "GeoPackage output: $(Join-Path $Exported "reports\observations.gpkg")"
   Write-Host "Restricted output correctly absent: secrets\private.txt"
 } finally {
   if ($registryProcess -and !$registryProcess.HasExited) {
