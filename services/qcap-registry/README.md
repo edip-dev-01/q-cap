@@ -1,31 +1,36 @@
 # Q-Cap Registry (MVP)
 
-A minimal registry that serves a health check, an index of `.qcap` files scanned from a seed directory, and the `.qcap` artifacts themselves.
+A minimal registry that stores `.qcap` artifacts on disk, persists an `index.json`, and can require bearer-token auth for publishing.
 
 ## Endpoints
 
-- `GET /health` — `{"status":"ok"}`
-- `GET /index.json` — JSON array of capsules `{ name, path, size, content_type }`
-- `GET /artifacts/<name>` — serves the `.qcap` file directly from the seed dir
+- `GET /health` - JSON status, including whether publish auth is enabled
+- `GET /index.json` - JSON array of capsules
+- `GET /index` - HTML index listing
+- `POST /artifacts` - publish a `.qcap`
+- `GET /artifacts/<name>` - download a `.qcap`
 
-## Seed Directory
+## Configuration
 
-By default, the registry scans `services/qcap-registry/seed`. You can override by setting `QCAP_REGISTRY_SEED`.
+- `QCAP_REGISTRY_STORE` - artifact directory
+- `QCAP_REGISTRY_SEED` - backward-compatible alias for `QCAP_REGISTRY_STORE`
+- `QCAP_REGISTRY_INDEX` - index file path, defaults to `<store>/index.json`
+- `QCAP_REGISTRY_TOKEN` - when set, `POST /artifacts` requires `Authorization: Bearer <token>`
 
-## Seed helper (optional)
-
-Seed directory defaults to `services/qcap-registry/seed` or set `QCAP_REGISTRY_SEED`.
-
-Quick start:
+## Quick Start
 
 ```sh
 # Seed with demo capsules
 scripts/seed-registry.sh
 
-# Run registry
-go run services/qcap-registry/main.go
+# Run registry with publish auth
+QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
 
-# Smoke test endpoints (optional)
+# Publish with the CLI
+cargo run -p qcap-cli -- publish target/qcap-demo/demo.qcap \
+  --registry http://127.0.0.1:8080 \
+  --token demo-token
+
+# Smoke test endpoints
 scripts/smoke-registry.sh
 ```
-cargo run -p qcap-cli -- pack /tmp/qcap-seed-b --out services/qcap-registry/seed/beta.qcap --key /tmp/ed25519.seed.hex

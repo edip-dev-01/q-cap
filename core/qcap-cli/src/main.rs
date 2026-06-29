@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use clap::{Parser, Subcommand};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use qcap_core::archive::create_qcap_archive_with_signature;
 use qcap_core::capabilities::CapabilityToken;
 use qcap_core::manifest::{PayloadFile, QcapManifest, RecipientStanza};
@@ -86,14 +86,29 @@ enum Commands {
         cap: PathBuf,
         #[arg(long = "identity")]
         identity: PathBuf,
+        #[arg(long = "revocations")]
+        revocations: Option<PathBuf>,
         #[arg(short = 'o', long = "out")]
         out: PathBuf,
+    },
+    /// Revoke a capability token by adding it to a signed revocation list
+    Revoke {
+        #[arg(long = "cap")]
+        cap: PathBuf,
+        #[arg(long = "issuer")]
+        issuer: PathBuf,
+        #[arg(short = 'o', long = "out")]
+        out: PathBuf,
+        #[arg(long = "reason", default_value = "revoked")]
+        reason: String,
     },
     /// Publish a .qcap to a registry
     Publish {
         file: PathBuf,
         #[arg(long = "registry", default_value = "http://127.0.0.1:8080")]
         registry: String,
+        #[arg(long = "token", env = "QCAP_REGISTRY_TOKEN")]
+        token: Option<String>,
     },
     /// Fetch a .qcap from a registry
     Fetch {
@@ -176,9 +191,20 @@ fn run() -> Result<()> {
             file,
             cap,
             identity,
+            revocations,
             out,
-        } => open_archive(&file, &cap, &identity, &out)?,
-        Commands::Publish { file, registry } => publish(&file, &registry)?,
+        } => open_archive(&file, &cap, &identity, revocations.as_deref(), &out)?,
+        Commands::Revoke {
+            cap,
+            issuer,
+            out,
+            reason,
+        } => revoke(&cap, &issuer, &out, &reason)?,
+        Commands::Publish {
+            file,
+            registry,
+            token,
+        } => publish(&file, &registry, token.as_deref())?,
         Commands::Fetch {
             artifact,
             out,
@@ -241,6 +267,23 @@ impl VerifyReport {
     fn signer_short(&self) -> String {
         self.signature.public_key.chars().take(16).collect()
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct RevocationList {
+    schema_version: String,
+    revoked: Vec<RevocationEntry>,
+    signature: String,
+    public_key: String,
+    algorithm: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+struct RevocationEntry {
+    cap_root: String,
+    capability_signature: String,
+    revoked_at: String,
+    reason: String,
 }
 
 fn pack_plain(input_dir: &Path, out: &Path, key: &Path) -> Result<()> {
@@ -349,11 +392,63 @@ fn grant(
     Ok(())
 }
 
-fn open_archive(file: &Path, cap_path: &Path, identity_path: &Path, out: &Path) -> Result<()> {
+fn revoke(cap_path: &Path, issuer_path: &Path, out: &Path, reason: &str) -> Result<()> {
+    let cap: CapabilityToken = read_json(cap_path)?;
+    cap.verify()?;
+    let issuer: Identity = read_json(issuer_path)?;
+    let signing_key = issuer.signing_key()?;
+
+    let mut list = if out.exists() {
+        let list: RevocationList = read_json(out)?;
+        list.verify()?;
+        list
+    } else {
+        RevocationList::empty(&signing_key)
+    };
+
+    let entry = RevocationEntry {
+        cap_root: cap.cap_root.clone(),
+        capability_signature: cap.signature.clone(),
+        revoked_at: unix_timestamp(),
+        reason: reason.to_string(),
+    };
+
+    if !list
+        .revoked
+        .iter()
+        .any(|existing| existing.capability_signature == entry.capability_signature)
+    {
+        list.revoked.push(entry);
+    }
+    list.sign(&signing_key);
+    write_json(out, &list)?;
+    println!(
+        "Revoked capability\n- cap_root: {}\n- revocations: {}\n- out: {}",
+        cap.cap_root,
+        list.revoked.len(),
+        out.display()
+    );
+    Ok(())
+}
+
+fn open_archive(
+    file: &Path,
+    cap_path: &Path,
+    identity_path: &Path,
+    revocations_path: Option<&Path>,
+    out: &Path,
+) -> Result<()> {
     let report = verify_archive(file)?;
     let identity: Identity = read_json(identity_path)?;
     let cap: CapabilityToken = read_json(cap_path)?;
     cap.verify()?;
+    if let Some(path) = revocations_path {
+        let revocations: RevocationList = read_json(path)?;
+        revocations.verify()?;
+        if revocations.revokes(&cap) {
+            return Err("capability has been revoked".into());
+        }
+    }
 
     let access = Access::parse(&cap.allow)?;
     if cap.cap_root != report.manifest.merkle_root {
@@ -500,18 +595,20 @@ fn inspect(file: &Path) -> Result<()> {
     Ok(())
 }
 
-fn publish(file: &Path, registry: &str) -> Result<()> {
+fn publish(file: &Path, registry: &str, token: Option<&str>) -> Result<()> {
     let url = format!("{}/artifacts", registry.trim_end_matches('/'));
     let bytes = fs::read(file)?;
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("artifact path has no UTF-8 file name")?;
-    let response: PublishResponse = ureq::post(&url)
+    let mut request = ureq::post(&url)
         .set("Content-Type", "application/qcap+zip")
-        .set("X-Qcap-Name", name)
-        .send_bytes(&bytes)?
-        .into_json()?;
+        .set("X-Qcap-Name", name);
+    if let Some(token) = token.filter(|value| !value.is_empty()) {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    let response: PublishResponse = request.send_bytes(&bytes)?.into_json()?;
     println!(
         "Published\n- artifact: {}\n- url: {}{}",
         response.name,
@@ -903,6 +1000,74 @@ fn enforce_expiry(expires: &str) -> Result<()> {
         return Ok(());
     }
     Err("unsupported expiry format; use unix-seconds:<ts>".into())
+}
+
+impl RevocationList {
+    fn empty(key: &SigningKey) -> Self {
+        let mut list = Self {
+            schema_version: "0.1.0".to_string(),
+            revoked: Vec::new(),
+            signature: String::new(),
+            public_key: hex::encode(key.verifying_key().to_bytes()),
+            algorithm: "ed25519".to_string(),
+        };
+        list.sign(key);
+        list
+    }
+
+    fn sign(&mut self, key: &SigningKey) {
+        self.public_key = hex::encode(key.verifying_key().to_bytes());
+        self.algorithm = "ed25519".to_string();
+        let sig: Signature = key.sign(self.signing_payload().as_bytes());
+        self.signature = hex::encode(sig.to_bytes());
+    }
+
+    fn verify(&self) -> Result<()> {
+        if self.algorithm != "ed25519" {
+            return Err("unsupported revocation list algorithm".into());
+        }
+        let pk_bytes = hex::decode(&self.public_key)?;
+        let sig_bytes = hex::decode(&self.signature)?;
+        let pk = VerifyingKey::from_bytes(
+            pk_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "bad revocation public key")?,
+        )?;
+        let sig = Signature::from_bytes(
+            sig_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "bad revocation signature")?,
+        );
+        pk.verify(self.signing_payload().as_bytes(), &sig)
+            .map_err(|_| "revocation list signature verify failed".into())
+    }
+
+    fn revokes(&self, cap: &CapabilityToken) -> bool {
+        self.revoked.iter().any(|entry| {
+            entry.capability_signature == cap.signature && entry.cap_root == cap.cap_root
+        })
+    }
+
+    fn signing_payload(&self) -> String {
+        let mut lines = vec![format!("schema_version={}", self.schema_version)];
+        for entry in &self.revoked {
+            lines.push(format!(
+                "{}|{}|{}|{}",
+                entry.cap_root, entry.capability_signature, entry.revoked_at, entry.reason
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+fn unix_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("unix-seconds:{seconds}")
 }
 
 fn glob_match(pattern: &str, candidate: &str) -> bool {

@@ -5,9 +5,11 @@ $Work = Join-Path $Root "target\qcap-demo"
 $RegistryDir = Join-Path $Work "registry"
 $Payload = Join-Path $Work "payload"
 $Exported = Join-Path $Work "exported"
+$RevokedExported = Join-Path $Work "revoked-exported"
 $Fetched = Join-Path $Work "fetched.qcap"
 $DemoQcap = Join-Path $Work "demo.qcap"
 $Cap = Join-Path $Work "cap.json"
+$Revocations = Join-Path $Work "revocations.json"
 $Issuer = Join-Path $Work "issuer.identity.json"
 $Recipient = Join-Path $Work "recipient.identity.json"
 $GeoPackage = Join-Path $Payload "reports\observations.gpkg"
@@ -15,6 +17,8 @@ $RegistryOut = Join-Path $Work "registry.out.log"
 $RegistryErr = Join-Path $Work "registry.err.log"
 $RegistryExe = Join-Path $Work "qcap-registry.exe"
 $QcapExe = Join-Path $Root "target\debug\qcap-cli.exe"
+$CargoExe = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+$GoExe = "C:\Program Files\Go\bin\go.exe"
 
 function Step($Message) {
   Write-Host "==> $Message"
@@ -59,7 +63,7 @@ Push-Location $Root
 $registryProcess = $null
 try {
   Step "building Rust workspace"
-  Run "cargo" @("build", "--workspace", "--quiet")
+  Run $CargoExe @("build", "--workspace", "--quiet")
 
   Step "creating issuer and recipient identities"
   Run $QcapExe @("init", "--name", "issuer", "--out", $Issuer)
@@ -72,22 +76,25 @@ try {
 
   Step "sealing encrypted .qcap"
   Run $QcapExe @("seal", $Payload, "--issuer", $Issuer, "--recipient", $Recipient, "--out", $DemoQcap)
+  Run $QcapExe @("verify", $DemoQcap)
   Run $QcapExe @("inspect", $DemoQcap)
 
   Step "starting registry"
   Push-Location (Join-Path $Root "services\qcap-registry")
   try {
-    Run "go" @("build", "-o", $RegistryExe, ".")
+    Run $GoExe @("build", "-o", $RegistryExe, ".")
   } finally {
     Pop-Location
   }
   $env:QCAP_REGISTRY_SEED = $RegistryDir
+  $env:QCAP_REGISTRY_TOKEN = "demo-token"
   $registryProcess = Start-Process -FilePath $RegistryExe -WorkingDirectory $Root -WindowStyle Hidden -RedirectStandardOutput $RegistryOut -RedirectStandardError $RegistryErr -PassThru
   Start-Sleep -Seconds 2
 
   Step "publishing and fetching artifact"
-  Run $QcapExe @("publish", $DemoQcap, "--registry", "http://127.0.0.1:8080")
+  Run $QcapExe @("publish", $DemoQcap, "--registry", "http://127.0.0.1:8080", "--token", "demo-token")
   Run $QcapExe @("fetch", "demo.qcap", "--out", $Fetched, "--registry", "http://127.0.0.1:8080")
+  Run $QcapExe @("verify", $Fetched)
 
   Step "proving open fails without a capability"
   RunExpectFailure $QcapExe @("open", $Fetched, "--cap", (Join-Path $Work "missing-cap.json"), "--identity", $Recipient, "--out", $Exported) "OK blocked open without capability"
@@ -111,6 +118,10 @@ try {
   if (Test-Path (Join-Path $Exported "secrets\private.txt")) {
     throw "restricted secret was exported"
   }
+
+  Step "revoking capability and proving it is blocked"
+  Run $QcapExe @("revoke", "--cap", $Cap, "--issuer", $Issuer, "--reason", "demo-complete", "--out", $Revocations)
+  RunExpectFailure $QcapExe @("open", $Fetched, "--cap", $Cap, "--identity", $Recipient, "--revocations", $Revocations, "--out", $RevokedExported) "OK blocked revoked capability"
 
   Step "MVP demo complete"
   Write-Host "Allowed output: $(Join-Path $Exported "reports\summary.txt")"

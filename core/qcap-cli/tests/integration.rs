@@ -42,10 +42,17 @@ fn pack_then_verify_ok() {
     assert!(out.exists(), "qcap created");
 
     // Verify
-    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+    let verify = Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
         .args(["verify", out.to_str().unwrap()])
         .assert()
-        .success();
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8_lossy(&verify).contains("Verification: OK"),
+        "verify reports success"
+    );
 }
 
 #[test]
@@ -226,6 +233,99 @@ fn grant_and_open_flow() {
         .success();
     assert!(export_dir.join("a.txt").exists());
     assert!(export_dir.join("b.bin").exists());
+}
+
+#[test]
+fn revoked_capability_blocks_open() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path();
+    let payload = root.join("payload");
+    fs::create_dir_all(&payload).unwrap();
+    fs::write(payload.join("a.txt"), b"hello").unwrap();
+
+    let out_qcap = root.join("demo.qcap");
+    let seed = root.join("seed.hex");
+    let cap = root.join("cap.json");
+    let revocations = root.join("revocations.json");
+    let identity = root.join("recipient.identity.json");
+    let export_dir = root.join("exported");
+    write_seed_hex(&seed);
+
+    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        .args([
+            "init",
+            "--name",
+            "recipient",
+            "--out",
+            identity.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let identity_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&identity).unwrap()).unwrap();
+    let audience = identity_json["signing_public_key"].as_str().unwrap()[0..16].to_string();
+
+    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        .args([
+            "pack",
+            payload.to_str().unwrap(),
+            "--out",
+            out_qcap.to_str().unwrap(),
+            "--key",
+            seed.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        .args([
+            "grant",
+            out_qcap.to_str().unwrap(),
+            "--allow",
+            "read",
+            "--audience",
+            &audience,
+            "--expires",
+            "unix-seconds:9999999999",
+            "--issuer",
+            identity.to_str().unwrap(),
+            "--out",
+            cap.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        .args([
+            "revoke",
+            "--cap",
+            cap.to_str().unwrap(),
+            "--issuer",
+            identity.to_str().unwrap(),
+            "--out",
+            revocations.to_str().unwrap(),
+            "--reason",
+            "rotation",
+        ])
+        .assert()
+        .success();
+    assert!(revocations.exists(), "revocation list created");
+
+    Command::new(assert_cmd::cargo::cargo_bin!("qcap-cli"))
+        .args([
+            "open",
+            out_qcap.to_str().unwrap(),
+            "--cap",
+            cap.to_str().unwrap(),
+            "--identity",
+            identity.to_str().unwrap(),
+            "--revocations",
+            revocations.to_str().unwrap(),
+            "--out",
+            export_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
 }
 
 #[test]
