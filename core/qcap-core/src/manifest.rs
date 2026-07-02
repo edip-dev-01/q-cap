@@ -5,11 +5,38 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Minimal manifest for the MVP.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct QcapManifest {
-    pub schema_version: String,      // e.g. "0.1.0"
-    pub merkle_root: String,         // "blake3:<hex>"
-    pub issuer: Option<String>,      // key fingerprint or issuer id
-    pub created_at: String,          // RFC3339
-    pub metadata: Value,             // free-form (title, description, tags, etc.)
+    pub schema_version: String, // e.g. "0.1.0"
+    pub merkle_root: String,    // "blake3:<hex>"
+    pub issuer: Option<String>, // key fingerprint or issuer id
+    pub created_at: String,     // RFC3339
+    pub metadata: Value,        // free-form (title, description, tags, etc.)
+    #[serde(default)]
+    pub package_id: Option<String>,
+    #[serde(default)]
+    pub encrypted: bool,
+    #[serde(default)]
+    pub files: Vec<PayloadFile>,
+    #[serde(default)]
+    pub recipients: Vec<RecipientStanza>,
+    #[serde(default)]
+    pub algorithms: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PayloadFile {
+    pub path: String,
+    pub size: u64,
+    pub nonce: String,
+    pub ciphertext_hash: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RecipientStanza {
+    pub recipient: String,
+    pub ephemeral_public_key: String,
+    pub nonce: String,
+    pub wrapped_key: String,
+    pub algorithm: String,
 }
 
 impl QcapManifest {
@@ -27,6 +54,38 @@ impl QcapManifest {
             issuer,
             created_at: created_at.into(),
             metadata,
+            package_id: None,
+            encrypted: false,
+            files: Vec::new(),
+            recipients: Vec::new(),
+            algorithms: Vec::new(),
+        }
+    }
+
+    pub fn new_sealed(
+        schema_version: impl Into<String>,
+        package_id: impl Into<String>,
+        merkle_root: impl Into<String>,
+        issuer: Option<String>,
+        metadata: Value,
+        files: Vec<PayloadFile>,
+        recipients: Vec<RecipientStanza>,
+    ) -> Self {
+        Self {
+            schema_version: schema_version.into(),
+            package_id: Some(package_id.into()),
+            merkle_root: merkle_root.into(),
+            issuer,
+            created_at: rfc3339_now(),
+            metadata,
+            encrypted: true,
+            files,
+            recipients,
+            algorithms: vec![
+                "xchacha20poly1305:file".to_string(),
+                "x25519-blake3-xchacha20poly1305:keywrap".to_string(),
+                "ed25519:signature".to_string(),
+            ],
         }
     }
 
@@ -55,7 +114,9 @@ impl QcapManifest {
 fn rfc3339_now() -> String {
     // Use chrono if added later; for now, synthesize from SystemTime as an ISO-like string.
     // Fallback to unix timestamp seconds to avoid extra deps.
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     // Represent as seconds since epoch; acceptable for MVP, though not strict RFC3339.
     // Example: "unix-seconds:1733420000"
     format!("unix-seconds:{}", now.as_secs())

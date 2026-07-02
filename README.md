@@ -61,7 +61,7 @@ flowchart LR
 
   %% --- Core Library ---
   subgraph Core["qcap-core (Rust)"]
-    CORE["Crypto • Merkle (BLAKE3) • Capabilities (macaroons)\nAEAD: XChaCha20-Poly1305 • ed25519 • Argon2id"]
+    CORE["Crypto • Merkle (BLAKE3) • Capabilities (macaroons)\nAEAD: XChaCha20-Poly1305 • ed25519 • planned Argon2id keyfiles"]
   end
 
   %% --- Consumers / SDKs ---
@@ -159,6 +159,45 @@ cargo run -p qcap-cli -- hash "hello world"
 # -> blake3:7d8d... (hash will vary)
 ```
 
+### MVP demo: sealed package, capability, registry
+
+The current MVP demonstrates the core Q-Cap flow locally:
+
+1. Generate issuer and recipient identities.
+2. Seal a payload directory into an encrypted `.qcap`.
+3. Include a generated sample GeoPackage at `reports/observations.gpkg`.
+4. Verify the sealed archive.
+5. Publish and fetch it through the token-protected local registry.
+6. Prove open fails without a capability.
+7. Grant a capability for `reports/*`.
+8. Open only the authorized payload path and verify the GeoPackage exports unchanged.
+9. Revoke the capability and prove the revoked token is blocked.
+
+On Windows PowerShell:
+
+```powershell
+.\scripts\demo.ps1
+```
+
+Manual equivalent:
+
+```bash
+cargo run -p qcap-cli -- init --name issuer --out /tmp/qcap-demo/issuer.identity.json
+cargo run -p qcap-cli -- init --name recipient --out /tmp/qcap-demo/recipient.identity.json
+cargo run -p qcap-cli -- sample-geopackage --out /tmp/qcap-demo/payload/reports/observations.gpkg
+cargo run -p qcap-cli -- seal /tmp/qcap-demo/payload --issuer /tmp/qcap-demo/issuer.identity.json --recipient /tmp/qcap-demo/recipient.identity.json --out /tmp/qcap-demo/demo.qcap
+cargo run -p qcap-cli -- verify /tmp/qcap-demo/demo.qcap
+QCAP_REGISTRY_SEED=/tmp/qcap-demo/registry QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
+cargo run -p qcap-cli -- publish /tmp/qcap-demo/demo.qcap --registry http://127.0.0.1:8080 --token demo-token
+cargo run -p qcap-cli -- fetch demo.qcap --out /tmp/qcap-demo/fetched.qcap --registry http://127.0.0.1:8080
+cargo run -p qcap-cli -- grant /tmp/qcap-demo/fetched.qcap --issuer /tmp/qcap-demo/issuer.identity.json --audience <recipient-id> --path "reports/*" --out /tmp/qcap-demo/cap.json
+cargo run -p qcap-cli -- open /tmp/qcap-demo/fetched.qcap --cap /tmp/qcap-demo/cap.json --identity /tmp/qcap-demo/recipient.identity.json --out /tmp/qcap-demo/exported
+cargo run -p qcap-cli -- revoke --cap /tmp/qcap-demo/cap.json --issuer /tmp/qcap-demo/issuer.identity.json --out /tmp/qcap-demo/revocations.json
+cargo run -p qcap-cli -- open /tmp/qcap-demo/fetched.qcap --cap /tmp/qcap-demo/cap.json --identity /tmp/qcap-demo/recipient.identity.json --revocations /tmp/qcap-demo/revocations.json --out /tmp/qcap-demo/revoked-exported
+```
+
+This is an MVP, not a hardened security product. It uses XChaCha20-Poly1305 for file encryption, X25519-derived wrapping keys for recipients, ed25519 signatures over the Merkle root, and signed capability tokens with enforced expiry, audience, and path constraints.
+
 ### Run the registry (dev)
 
 You can seed demo capsules and run the registry locally. It exposes:
@@ -170,14 +209,16 @@ You can seed demo capsules and run the registry locally. It exposes:
 * `/index` — HTML index listing
 * `/artifacts/<name>` — static download of seeded artifacts
 
+Set `QCAP_REGISTRY_TOKEN` to require `Authorization: Bearer <token>` for `POST /artifacts`. The registry persists artifact metadata to `index.json` in the store directory by default.
+
 Quick start:
 
 ```bash
 # Seed demo artifacts (alpha.qcap, beta.qcap)
 scripts/seed-registry.sh
 
-# Run the registry
-go run services/qcap-registry/main.go
+# Run the registry with publish auth
+QCAP_REGISTRY_TOKEN=demo-token go run services/qcap-registry/main.go
 
 # Optional: smoke test endpoints
 scripts/smoke-registry.sh
@@ -197,7 +238,7 @@ npm run build
 
 Planned commands and features (tracked in GitHub Issues):
 
-* `qcap init` — local key material (Argon2id-protected), fingerprint printout
+* `qcap init` — local MVP identity/key material, fingerprint printout
 * `qcap pack` — create `.qcap` archive with `manifest.json`, `payload/`, `meta/`
 * `qcap seal` — per-file XChaCha20-Poly1305 envelope encryption, recipients
 * `qcap open` — verify + decrypt with capability; caveats enforced
@@ -238,10 +279,10 @@ A `.qcap` is a **single file** (ZIP or tar+gz) containing:
 ## Security model (high level)
 
 * Memory-safe languages (Rust core; Go service)
-* Modern crypto defaults (XChaCha20-Poly1305, BLAKE3, ed25519, Argon2id)
+* Modern crypto defaults in the MVP flow (XChaCha20-Poly1305, BLAKE3, ed25519)
 * Keys:
 
-  * Dev: encrypted keyfiles
+  * Dev: local identity JSON; Argon2id-protected keyfiles are planned
   * Prod: cloud KMS / HSM for issuer roots; rotation documented
 * Supply chain:
 
@@ -253,9 +294,17 @@ A `.qcap` is a **single file** (ZIP or tar+gz) containing:
 
 ## Geospatial & GeoPackage
 
-Q-Cap is payload-agnostic but designed to carry geospatial content. The MVP will document how to:
+Q-Cap is payload-agnostic but designed to carry geospatial content. The MVP includes a concrete GeoPackage fixture:
 
-* Transport **GeoPackage** unchanged inside `.qcap`
+```bash
+cargo run -p qcap-cli -- sample-geopackage --out /tmp/qcap-demo/payload/reports/observations.gpkg
+```
+
+The generated file is a valid SQLite-backed GeoPackage with one WGS 84 point feature. The MVP demo seals it inside `.qcap`, grants access to `reports/*`, opens the package, and verifies the exported GeoPackage is byte-for-byte unchanged.
+
+The format supports:
+
+* Transporting **GeoPackage** unchanged inside `.qcap`
 * Embed STAC/OGC metadata in `meta/`
 * Stream-verify large rasters via Merkle while fetching ranges
 

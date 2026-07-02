@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signer, Verifier, Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -29,7 +29,9 @@ impl CapabilityToken {
     }
 
     pub fn verify(&self) -> Result<()> {
-        if self.algorithm != "ed25519" { return Err("unsupported algorithm".into()); }
+        if self.algorithm != "ed25519" {
+            return Err("unsupported algorithm".into());
+        }
         let pk_bytes = hex::decode(&self.public_key)?;
         let sig_bytes = hex::decode(&self.signature)?;
         let pk = VerifyingKey::from_bytes(pk_bytes.as_slice().try_into().map_err(|_| "bad pk")?)?;

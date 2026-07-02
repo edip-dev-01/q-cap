@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signer, Verifier, Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -6,9 +6,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct QcapSignatureBundle {
     pub merkle_root: String,
-    pub signature: String,   // hex
-    pub public_key: String,  // hex (32 bytes)
-    pub algorithm: String,   // "ed25519"
+    pub signature: String,  // hex
+    pub public_key: String, // hex (32 bytes)
+    pub algorithm: String,  // "ed25519"
 }
 
 pub fn sign_merkle_root(root: &str, keypair: &SigningKey) -> QcapSignatureBundle {
