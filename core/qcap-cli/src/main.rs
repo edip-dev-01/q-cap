@@ -1299,7 +1299,8 @@ fn identity_passphrase(
 
 fn read_passphrase(path: Option<&Path>, confirm: bool) -> Result<Zeroizing<String>> {
     let passphrase = if let Some(path) = path {
-        let value = fs::read_to_string(path)?;
+        // Protect the original allocation as well as the trimmed passphrase copy.
+        let value = Zeroizing::new(fs::read_to_string(path)?);
         Zeroizing::new(value.trim_end_matches(['\r', '\n']).to_string())
     } else if let Ok(value) = std::env::var("QCAP_KEY_PASSPHRASE") {
         Zeroizing::new(value)
